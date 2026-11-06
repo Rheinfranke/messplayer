@@ -1,0 +1,366 @@
+<!DOCTYPE html>
+<html lang="de">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Biodanza Messplayer</title>
+<style>
+  body { font-family: system-ui, sans-serif; max-width: 680px; margin: 1.5rem auto; padding: 0 1rem; color: #222; background: #fafaf7; line-height: 1.5; }
+  h1 { font-size: 1.4rem; font-weight: 500; margin-bottom: 0.2rem; }
+  fieldset { border: 1px solid #ccc; border-radius: 8px; margin: 1rem 0; padding: 0.8rem 1rem; }
+  legend { padding: 0 0.4rem; color: #555; }
+  label { display: block; margin: 0.4rem 0; }
+  input[type=number] { width: 5rem; font-size: 1rem; }
+  input[type=text] { width: 60%; font-size: 1rem; padding: 0.3rem; }
+  button { font-size: 1rem; padding: 0.55rem 1rem; border-radius: 8px; border: 1px solid #888; background: #fff; cursor: pointer; margin: 0.25rem 0.25rem 0.25rem 0; }
+  button.main { background: #2d6a4f; color: #fff; border-color: #2d6a4f; }
+  button.act { background: #eef4f0; border-color: #9bb8a6; }
+  button.act.on { background: #2d6a4f; color: #fff; }
+  button:disabled { opacity: 0.4; cursor: default; }
+  #now { font-size: 1.5rem; margin: 0.8rem 0 0.1rem; min-height: 2rem; }
+  #sub, #hrstatus { color: #555; font-variant-numeric: tabular-nums; }
+  .ok { color: #2d6a4f; } .miss { color: #a33; } .err { color: #a33; font-size: 0.9rem; }
+  .hint { color: #555; font-size: 0.9rem; }
+  .warn { background: #fff4d6; border: 1px solid #e5c46b; border-radius: 8px; padding: 0.5rem 0.8rem; margin: 0.8rem 0; font-size: 0.9rem; }
+  table { border-collapse: collapse; width: 100%; font-size: 0.85rem; margin-top: 0.8rem; }
+  td, th { border-bottom: 1px solid #ddd; padding: 0.25rem 0.4rem; text-align: left; font-variant-numeric: tabular-nums; }
+  #logwrap { max-height: 16rem; overflow: auto; }
+  .rv { border-bottom: 1px solid #e5e5e0; padding: 0.4rem 0; }
+  .rv b { font-weight: 500; }
+  .rv button { font-size: 0.9rem; padding: 0.35rem 0.6rem; }
+  .rv button.on { background: #2d6a4f; color: #fff; border-color: #2d6a4f; }
+</style>
+</head>
+<body>
+<h1>Biodanza Messplayer</h1>
+<div class="hint">Endlosschleife ohne Pausen, ausbalancierte Reihenfolge, Herzschläge und Musik mit derselben Uhr.</div>
+
+<fieldset>
+  <legend>0. Brustgurt verbinden (eSense Pulse oder jeder Bluetooth-Pulsgurt)</legend>
+  <button class="main" id="hrconnect">Gurt verbinden</button>
+  <button id="hrstop" disabled>Aufzeichnung beenden</button>
+  <div id="hrstatus"></div>
+  <div class="hint">Die eSense-App vorher schließen. Der Gurt kann nur mit einer App gleichzeitig verbunden sein.</div>
+</fieldset>
+
+<fieldset>
+  <legend>1. Musikdateien wählen</legend>
+  <input type="file" id="files" multiple>
+  <div class="hint">Lassen sich nicht alle auf einmal markieren, wähle sie einzeln nacheinander. Der Player sammelt sie.</div>
+  <div id="filecheck"></div>
+</fieldset>
+
+<fieldset>
+  <legend>2. Einstellungen</legend>
+  <label>Beginnen bei Block Nr.: <input type="number" id="block" min="1" value="1" step="1">
+    <span class="err" id="blockerr"></span></label>
+  <label><input type="checkbox" id="silence"> Stille als sechstes „Stück“ einmischen (3 Minuten, als Vergleich ohne Musik)</label>
+  <div id="order" class="hint"></div>
+</fieldset>
+
+<button class="main" id="start" disabled>Start</button>
+<button id="stop" disabled>Stopp</button>
+<button class="main" id="resume" style="display:none">Weiter</button>
+
+<div class="warn">Wichtig: Bildschirm anlassen und den Player im Vordergrund lassen. Sonst hält Android Musik und Aufzeichnung an.</div>
+<div id="now"></div>
+<div id="sub"></div>
+
+<fieldset>
+  <legend>3. Was tust du gerade? (antippen, wenn sich die Tätigkeit ändert)</legend>
+  <div id="acts"></div>
+  <input type="text" id="note" placeholder="Eigene Notiz, z. B. Kaffee getrunken"> <button id="addnote">Notiz</button>
+</fieldset>
+
+<fieldset id="review" style="display:none">
+  <legend>4. Nachbefragung: Wie hat jedes Stück gewirkt?</legend>
+  <div class="hint">Nach der Sitzung in Ruhe ausfüllen. Ein Tipp pro Stück genügt, ändern geht jederzeit.</div>
+  <div id="reviewlist"></div>
+</fieldset>
+
+<fieldset>
+  <legend>5. Daten speichern</legend>
+  <button class="main" id="saveall">Alles speichern (CSV)</button>
+  <button id="clear">Gespeicherte Daten löschen</button>
+  <div id="savestatus" class="hint">Speichert eine Datei mit Protokoll und Herzschlägen in die Downloads. Diese Datei an Claude schicken.</div>
+</fieldset>
+
+<div id="logwrap"><table id="log"><thead><tr><th>Typ</th><th>Block</th><th>Bezeichnung</th><th>Start</th><th>Ende</th></tr></thead><tbody></tbody></table></div>
+
+<script>
+const PIECES = [
+  { key: "raiz",  name: "Raíz Negra",           match: /raiz|raíz/i },
+  { key: "tamb",  name: "Tamborins",            match: /tamb/i },
+  { key: "copp",  name: "Coppélia",             match: /copp/i },
+  { key: "lotus", name: "Blue Lotus",           match: /lotus/i },
+  { key: "cav",   name: "Cavalleria Rusticana", match: /cavall/i }
+];
+const SILENCE = { key: "silence", name: "Stille" };
+const ACTIVITIES = ["Sitzen ruhig", "Arbeiten am Schreibtisch", "Stehen", "Gehen", "Radfahren", "Autofahren", "Hausarbeit", "Kochen/Essen", "Gespräch", "Sport", "Liegen/Ruhen", "Pause/Unterbrechung"];
+const FEEL = ["Blick weit", "Antrieb", "Nach innen", "Ruhig", "Neutral"];
+const STORE = "biodanza_messplayer_log", BSTORE = "biodanza_messplayer_beats";
+
+function williams(n) {
+  const base = [0]; let lo = 1, hi = n - 1;
+  for (let k = 1; k < n; k++) base.push(k % 2 ? lo++ : hi--);
+  const rows = [];
+  for (let i = 0; i < n; i++) rows.push(base.map(v => (v + i) % n));
+  if (n % 2) for (let i = 0; i < n; i++) rows.push([...rows[i]].reverse());
+  return rows;
+}
+
+const $ = id => document.getElementById(id);
+const pad = (n, l = 2) => String(n).padStart(l, "0");
+const stamp = d => `${pad(d.getHours())}:${pad(d.getMinutes())}:${pad(d.getSeconds())}.${pad(d.getMilliseconds(), 3)}`;
+const dstamp = d => `${pad(d.getDate())}.${pad(d.getMonth() + 1)}.${d.getFullYear()}`;
+const idstamp = d => `${d.getFullYear()}${pad(d.getMonth() + 1)}${pad(d.getDate())}-${pad(d.getHours())}${pad(d.getMinutes())}${pad(d.getSeconds())}`;
+
+const urls = {};
+let running = false, log = [], beats = [], audio = new Audio(), blockNo = 1, pos = 0, current = null, wakeLock = null, sessionId = null;
+
+function items() { return $("silence").checked ? [...PIECES, SILENCE] : PIECES; }
+function orders() { return williams(items().length); }
+function orderOf(b) { const o = orders(); return o[(b - 1) % o.length].map(i => items()[i]); }
+function readBlock() {
+  const v = parseInt(String($("block").value).replace(",", "."), 10);
+  if (!Number.isFinite(v) || v < 1) { $("blockerr").textContent = "Bitte eine ganze Zahl ab 1 eingeben."; return null; }
+  $("blockerr").textContent = ""; return v;
+}
+function showOrder() {
+  const b = readBlock(); if (b === null) { $("order").textContent = ""; return; }
+  $("order").textContent = `Block ${b}: ` + orderOf(b).map(p => p.name).join(" → ") +
+    `. Danach geht es endlos mit Block ${b + 1}, ${b + 2} … weiter.`;
+}
+$("block").addEventListener("input", () => { showOrder(); checkReady(); });
+$("silence").addEventListener("change", () => { showOrder(); checkReady(); });
+
+function silentWav(sec) {
+  const rate = 8000, n = rate * sec, buf = new ArrayBuffer(44 + n), v = new DataView(buf);
+  const w = (o, s) => [...s].forEach((c, i) => v.setUint8(o + i, c.charCodeAt(0)));
+  w(0, "RIFF"); v.setUint32(4, 36 + n, true); w(8, "WAVE"); w(12, "fmt ");
+  v.setUint32(16, 16, true); v.setUint16(20, 1, true); v.setUint16(22, 1, true);
+  v.setUint32(24, rate, true); v.setUint32(28, rate, true); v.setUint16(32, 1, true); v.setUint16(34, 8, true);
+  w(36, "data"); v.setUint32(40, n, true);
+  for (let i = 0; i < n; i++) v.setUint8(44 + i, 128);
+  return URL.createObjectURL(new Blob([buf], { type: "audio/wav" }));
+}
+urls.silence = silentWav(180);
+
+$("files").addEventListener("change", e => {
+  for (const f of e.target.files) {
+    const p = PIECES.find(p => p.match.test(f.name));
+    if (p) urls[p.key] = URL.createObjectURL(f);
+  }
+  $("filecheck").innerHTML = PIECES.map(p =>
+    `<div class="${urls[p.key] ? "ok" : "miss"}">${urls[p.key] ? "✓" : "✗"} ${p.name}</div>`).join("");
+  checkReady();
+  e.target.value = "";
+});
+function checkReady() { $("start").disabled = running || !PIECES.every(p => urls[p.key]) || readBlock() === null; }
+
+function save() { try { localStorage.setItem(STORE, JSON.stringify(log)); } catch (e) {} }
+function saveBeats() { try { localStorage.setItem(BSTORE, JSON.stringify(beats)); } catch (e) {} }
+function row(r) {
+  const tr = document.createElement("tr");
+  tr.innerHTML = `<td>${r.typ}</td><td>${r.block ?? ""}</td><td>${r.name}</td><td>${stamp(new Date(r.start))}</td><td>${r.end ? stamp(new Date(r.end)) : ""}</td>`;
+  const tb = $("log").querySelector("tbody"); tb.insertBefore(tr, tb.firstChild);
+}
+function addEntry(r) { if (sessionId && !r.session) r.session = sessionId; log.push(r); row(r); save(); }
+
+$("acts").innerHTML = ACTIVITIES.map(a => `<button class="act" data-a="${a}">${a}</button>`).join("");
+$("acts").addEventListener("click", e => {
+  const a = e.target.dataset.a; if (!a) return;
+  document.querySelectorAll(".act").forEach(b => b.classList.toggle("on", b.dataset.a === a));
+  addEntry({ typ: "Tätigkeit", name: a, start: Date.now() });
+});
+$("addnote").addEventListener("click", () => {
+  const t = $("note").value.trim(); if (!t) return;
+  addEntry({ typ: "Notiz", name: t, start: Date.now() }); $("note").value = "";
+});
+
+/* ---------- Musik ---------- */
+let blockedSince = null;
+function tryPlay() {
+  audio.play().then(() => {
+    if (blockedSince) { addEntry({ typ: "Unterbrechung", block: current ? current.block : "", name: "Wiedergabe angehalten (Gerät/Browser)", start: blockedSince, end: Date.now() }); blockedSince = null; }
+    $("resume").style.display = "none";
+  }).catch(() => {
+    if (!blockedSince) blockedSince = Date.now();
+    $("now").textContent = "Musik angehalten. Bitte auf „Weiter“ tippen.";
+    $("resume").style.display = "inline-block";
+  });
+}
+$("resume").addEventListener("click", tryPlay);
+function next() {
+  if (!running) return;
+  const order = orderOf(blockNo);
+  if (pos >= order.length) { blockNo++; pos = 0; return next(); }
+  const p = order[pos];
+  current = { typ: "Stück", block: blockNo, pos: pos + 1, name: p.name, start: null, end: null };
+  audio.src = urls[p.key];
+  tryPlay();
+  try { navigator.mediaSession.metadata = new MediaMetadata({ title: p.name, artist: `Block ${blockNo}, Position ${pos + 1}` }); } catch (e) {}
+  $("now").textContent = p.name;
+}
+setInterval(() => { if (running && current && audio.paused && !audio.ended) { if (!blockedSince) blockedSince = Date.now(); tryPlay(); } }, 3000);
+document.addEventListener("visibilitychange", () => { if (document.visibilityState === "visible" && running && current && audio.paused) tryPlay(); });
+audio.addEventListener("playing", () => { if (current && !current.start) current.start = Date.now(); if (current) $("now").textContent = current.name; });
+audio.addEventListener("ended", () => {
+  if (!current) return;
+  current.end = Date.now(); if (!current.start) current.start = current.end;
+  addEntry(current); current = null; pos++; next();
+});
+audio.addEventListener("error", () => {
+  if (current) addEntry({ typ: "Fehler", block: current.block, name: "Wiedergabefehler bei " + current.name, start: Date.now() });
+  current = null; pos++; setTimeout(next, 500);
+});
+setInterval(() => {
+  if (!running || !current) return;
+  const left = Math.max(0, Math.round((audio.duration || 0) - audio.currentTime));
+  $("sub").textContent = `Block ${current.block}, Position ${current.pos}  ·  noch ${Math.floor(left / 60)}:${pad(left % 60)}  ·  ${stamp(new Date()).slice(0, 8)}`;
+}, 500);
+
+async function keepAwake() { try { wakeLock = await navigator.wakeLock?.request("screen"); } catch (e) {} }
+document.addEventListener("visibilitychange", () => { if (document.visibilityState === "visible" && (running || hrWanted)) keepAwake(); });
+
+$("start").addEventListener("click", async () => {
+  const b = readBlock(); if (b === null) return;
+  running = true; blockNo = b; pos = 0; sessionId = idstamp(new Date());
+  $("start").disabled = true; $("stop").disabled = false; $("block").disabled = true; $("silence").disabled = true;
+  keepAwake();
+  addEntry({ typ: "Start", name: "Musik gestartet ab Block " + b + ($("silence").checked ? " (mit Stille)" : ""), start: Date.now() });
+  next();
+});
+$("stop").addEventListener("click", () => {
+  running = false; audio.pause();
+  if (current && current.start) { current.end = Date.now(); current.name += " (abgebrochen)"; addEntry(current); }
+  current = null;
+  addEntry({ typ: "Stopp", name: `Musik beendet, nächster Block wäre ${blockNo + (pos > 0 ? 1 : 0)}`, start: Date.now() });
+  $("now").textContent = "Gestoppt."; $("sub").textContent = "";
+  $("stop").disabled = true; $("block").disabled = false; $("silence").disabled = false;
+  $("block").value = blockNo + (pos > 0 ? 1 : 0); showOrder(); checkReady();
+  renderReview();
+});
+
+/* ---------- Brustgurt ---------- */
+let hrDev = null, hrChar = null, hrWanted = false, hrLast = 0, hrRec = null;
+function hrStatus(t) { $("hrstatus").textContent = t; }
+function onHr(ev) {
+  const v = ev.target.value, now = Date.now(); let o = 1; const flags = v.getUint8(0);
+  const bpm = (flags & 1) ? v.getUint16(1, true) : v.getUint8(1); o += (flags & 1) ? 2 : 1;
+  if (flags & 8) o += 2;
+  const rrs = [];
+  if (flags & 16) for (; o + 1 < v.byteLength; o += 2) rrs.push(v.getUint16(o, true) * 1000 / 1024);
+  let t = now; const fresh = [];
+  for (let i = rrs.length - 1; i >= 0; i--) { fresh.unshift([Math.round(t), Math.round(rrs[i]), hrRec]); t -= rrs[i]; }
+  beats.push(...fresh);
+  hrLast = now;
+  hrStatus(`Verbunden · Puls ${bpm} · ${beats.length} Herzschläge aufgezeichnet`);
+}
+setInterval(() => {
+  if (hrWanted) saveBeats();
+  if (hrWanted && hrLast && Date.now() - hrLast > 10000) hrStatus("Kein Signal seit " + Math.round((Date.now() - hrLast) / 1000) + " s. Gurt anfeuchten, Bildschirm anlassen.");
+}, 15000);
+async function hrAttach() {
+  const server = await hrDev.gatt.connect();
+  const svc = await server.getPrimaryService("heart_rate");
+  hrChar = await svc.getCharacteristic("heart_rate_measurement");
+  hrChar.addEventListener("characteristicvaluechanged", onHr);
+  await hrChar.startNotifications();
+}
+$("hrconnect").addEventListener("click", async () => {
+  if (!navigator.bluetooth) { hrStatus("Bluetooth ist in diesem Browser nicht verfügbar. Bitte Chrome verwenden und Bluetooth einschalten."); return; }
+  try {
+    hrDev = await navigator.bluetooth.requestDevice({ filters: [{ services: ["heart_rate"] }] });
+    hrDev.addEventListener("gattserverdisconnected", async () => {
+      if (!hrWanted) return;
+      hrStatus("Verbindung verloren, verbinde neu …");
+      addEntry({ typ: "Gurt", name: "Verbindung verloren", start: Date.now() });
+      for (let i = 0; i < 20 && hrWanted; i++) {
+        try { await hrAttach(); addEntry({ typ: "Gurt", name: "Wieder verbunden", start: Date.now() }); return; }
+        catch (e) { await new Promise(r => setTimeout(r, 3000)); }
+      }
+      hrStatus("Neu verbinden fehlgeschlagen. Bitte erneut „Gurt verbinden“ tippen.");
+    });
+    await hrAttach();
+    hrWanted = true; keepAwake();
+    if (!hrRec) hrRec = idstamp(new Date());
+    addEntry({ typ: "Gurt", name: "Aufzeichnung gestartet: " + (hrDev.name || "Gurt"), start: Date.now(), session: hrRec });
+    $("hrstop").disabled = false; $("hrconnect").textContent = "Neu verbinden";
+    hrStatus("Verbunden mit " + (hrDev.name || "Gurt") + ". Warte auf Herzschläge …");
+  } catch (e) { hrStatus("Verbindung nicht möglich: " + (e && e.message ? e.message : e)); }
+});
+$("hrstop").addEventListener("click", async () => {
+  hrWanted = false;
+  try { await hrChar?.stopNotifications(); } catch (e) {}
+  try { hrDev?.gatt.disconnect(); } catch (e) {}
+  saveBeats();
+  addEntry({ typ: "Gurt", name: "Aufzeichnung beendet, " + beats.filter(b => b[2] === hrRec).length + " Herzschläge", start: Date.now(), session: hrRec });
+  hrStatus("Beendet. Bitte „Alles speichern“ tippen.");
+  hrRec = null; $("hrstop").disabled = true; $("hrconnect").textContent = "Gurt verbinden";
+});
+
+/* ---------- Nachbefragung und Taste ---------- */
+function lastMusicSession() { for (let i = log.length - 1; i >= 0; i--) if (log[i].typ === "Stück") return log[i].session; return null; }
+function renderReview() {
+  const sid = lastMusicSession();
+  const pieces = log.filter(r => r.session === sid && r.typ === "Stück");
+  if (!sid || !pieces.length) { $("review").style.display = "none"; return; }
+  const chosen = {};
+  log.filter(r => r.session === sid && r.typ === "Erleben").forEach(r => { chosen[r.ref] = r.name; });
+  $("reviewlist").innerHTML = pieces.map(p => {
+    const ref = p.block + "-" + p.pos;
+    return `<div class="rv"><b>${stamp(new Date(p.start)).slice(0, 5)} · ${p.name}</b><br>` +
+      FEEL.map(f => `<button data-ref="${ref}" data-f="${f}" class="${chosen[ref] === f ? "on" : ""}">${f}</button>`).join("") + `</div>`;
+  }).join("");
+  $("review").style.display = "block";
+}
+$("reviewlist").addEventListener("click", e => {
+  const ref = e.target.dataset.ref, f = e.target.dataset.f; if (!ref) return;
+  const sid = lastMusicSession();
+  const p = log.find(r => r.session === sid && r.typ === "Stück" && (r.block + "-" + r.pos) === ref);
+  addEntry({ typ: "Erleben", ref, block: p.block, pos: p.pos, name: f + " (" + p.name + ")", start: p.start, end: p.end, session: sid });
+  renderReview();
+});
+function marker(label) {
+  if (!running) return;
+  addEntry({ typ: "Marker", block: current ? current.block : "", name: label + (current ? " während " + current.name : ""), start: Date.now() });
+}
+try {
+  navigator.mediaSession.setActionHandler("pause", () => { marker("Marker (Taste)"); setTimeout(tryPlay, 50); });
+  navigator.mediaSession.setActionHandler("play", () => tryPlay());
+  navigator.mediaSession.setActionHandler("nexttrack", () => marker("Marker (Taste vor)"));
+  navigator.mediaSession.setActionHandler("previoustrack", () => marker("Marker (Taste zurück)"));
+} catch (e) {}
+
+/* ---------- Speichern ---------- */
+$("saveall").addEventListener("click", () => {
+  saveBeats();
+  const lines = ["Sitzung;Typ;Block;Position;Bezeichnung;Datum;Start;Ende;Dauer_s;RR_ms"];
+  log.forEach(r => {
+    const st = new Date(r.start), e = r.end ? new Date(r.end) : null;
+    lines.push([r.session ?? "", r.typ, r.block ?? "", r.pos ?? "", r.name, dstamp(st), stamp(st), e ? stamp(e) : "",
+      e ? ((e - st) / 1000).toFixed(1).replace(".", ",") : "", ""].join(";"));
+  });
+  beats.forEach(b => { const st = new Date(b[0]); lines.push([b[2] ?? "", "Herzschlag", "", "", "", dstamp(st), stamp(st), "", "", b[1]].join(";")); });
+  const blob = new Blob(["﻿" + lines.join("\n")], { type: "text/csv" });
+  const a = document.createElement("a"); a.href = URL.createObjectURL(blob);
+  a.download = "Messdaten_" + idstamp(new Date()) + ".csv"; document.body.appendChild(a); a.click(); a.remove();
+  $("savestatus").textContent = `Gespeichert: ${log.length} Einträge und ${beats.length} Herzschläge. Die Datei liegt in den Downloads.`;
+});
+let armed = false;
+$("clear").addEventListener("click", () => {
+  if (!armed) { armed = true; $("clear").textContent = "Wirklich löschen? Vorher speichern! Nochmal tippen"; setTimeout(() => { armed = false; $("clear").textContent = "Gespeicherte Daten löschen"; }, 5000); return; }
+  armed = false; $("clear").textContent = "Gespeicherte Daten löschen";
+  log = []; beats = []; save(); saveBeats(); $("log").querySelector("tbody").innerHTML = ""; renderReview();
+  $("savestatus").textContent = "Gelöscht.";
+});
+
+try { const old = JSON.parse(localStorage.getItem(STORE) || "[]"); if (old.length) { log = old; old.forEach(row); } } catch (e) {}
+try { beats = JSON.parse(localStorage.getItem(BSTORE) || "[]"); } catch (e) { beats = []; }
+if (beats.length) $("savestatus").textContent = `Gespeichert im Browser: ${log.length} Einträge und ${beats.length} Herzschläge.`;
+showOrder();
+renderReview();
+</script>
+</body>
+</html>
